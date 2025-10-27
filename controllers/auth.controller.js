@@ -108,16 +108,24 @@ export const login = async (req,res)=>{
 
 export const getUserProfile = async (req,res)=>{
     try{
+       const userId = req.user._id;
 
+      const user = await User.findById(userId).select("-password");
+
+      if(!user){
+        return res.status(404).json({message: "USER NOT FOUND"});
+      }
+      res.status(200).json({user});
     }
     catch(error){
-        
+      console.log("error fetching user profile", error.message);
+      return res.status(500).json({message: "Error fetching user profile"})
     }
 }
 
 export const fetchFriends = async (req,res)=>{
     try{
-
+      
     }
     catch(error){
         
