@@ -4,10 +4,10 @@ import {generateTokenAndSetCookie} from "../webtoken/generateToken.js";
 
 export const signup = async (req, res) => {
   try {
-    const { username, email, password } = req.body;
+    const { username, email, password, mobile } = req.body;
 
     // Validation - All fields required
-    if (!username || !email || !password) {
+    if (!username || !email || !password || !mobile) {
       return res.status(400).json({ message: "All fields are required" });
     }
 
@@ -43,6 +43,7 @@ export const signup = async (req, res) => {
       username,
       email,
       password: hashedPassword,
+      mobile,
     });
 
     // Save user to database
@@ -58,6 +59,7 @@ export const signup = async (req, res) => {
         _id: newUser._id,
         username: newUser.username,
         email: newUser.email,
+        mobile: newUser.mobile
       },
     });
   } catch (error) {
@@ -69,9 +71,37 @@ export const signup = async (req, res) => {
 
 export const login = async (req,res)=>{
     try{
+      const {loginIdentifier, password} = req.body;
 
+      if(!loginIdentifier || !password){
+        return res.status(400).json({message: "All fields are required"});
+      }
+
+      const existingUser = await User.findOne({
+        $or: [
+          {username: loginIdentifier},
+          {email: loginIdentifier},
+          {mobile: loginIdentifier}
+        ]
+      });
+
+      if(!existingUser){
+        return res.status(400).json({message: "Invalid credentials"});
+      }
+
+      const isMatch = await bcrypt.compare(password, existingUser?.password || "");
+      if(!isMatch){
+        return res.status(400).json({message: "Invalid password"});
+      }
+
+      generateTokenAndSetCookie(existingUser._id,res);
+
+      res.status(200).json({ message: "Login successful", user: { username: existingUser.username, email: existingUser.email } });
+      
     }
     catch(error){
+      console.log("Error in login controller", error.message);
+      return res.status(500).json({message: "Error in logging in"});
         
     }
 }
