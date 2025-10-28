@@ -123,11 +123,37 @@ export const getUserProfile = async (req,res)=>{
     }
 }
 
-export const fetchFriends = async (req,res)=>{
-    try{
-      
-    }
-    catch(error){
-        
-    }
-}
+export const fetchFriends = async (req, res) => {
+  try {
+    const { page = 1, limit = 10, search = "" } = req.query;
+    const skip = (page - 1) * limit;
+
+    // Build a filter query
+    const query = {
+      _id: { $ne: req.user._id },
+      $or: [
+        { username: { $regex: search, $options: "i" } },
+        { email: { $regex: search, $options: "i" } },
+      ],
+    };
+
+    // Fetch users with pagination
+    const users = await User.find(query, { _id: 1, username: 1, email: 1 })
+      .skip(Number(skip))
+      .limit(Number(limit))
+      .sort({ username: 1 }); // optional sort alphabetically
+
+    // Count total users for pagination metadata
+    const totalUsers = await User.countDocuments(query);
+
+    return res.status(200).json({
+      users,
+      currentPage: Number(page),
+      totalPages: Math.ceil(totalUsers / limit),
+      totalUsers,
+    });
+  } catch (error) {
+    console.error("Error fetching users:", error);
+    return res.status(500).json({ message: "Error fetching users" });
+  }
+};
