@@ -95,7 +95,7 @@ export const login = async (req,res)=>{
       }
 
       generateTokenAndSetCookie(existingUser._id,res);
-
+      console.log("login",existingUser.username);
       res.status(200).json({ message: "Login successful", user: { username: existingUser.username, email: existingUser.email } });
       
     }
