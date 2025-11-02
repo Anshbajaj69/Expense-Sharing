@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import XLSX from "xlsx";
 import Expense from "../models/expense.model.js";
 import User from "../models/user.model.js";
 
@@ -186,4 +187,206 @@ export const getUserExpenses = async (req, res) => {
         console.error("Error in getUserExpenses:", error);
         return res.status(500).json({ message: "Error fetching expenses" });
     }
+};
+
+export const getBalanceSheet = async (req, res) => {
+  try {
+    const userId = req.user._id.toString(); // Convert once to string
+
+    // Fetch all expenses where the user is payer or participant
+    const expenses = await Expense.find({
+      $or: [{ userId }, { participants: userId }],
+    })
+      .populate("userId", "username email")
+      .populate("participants", "username email");
+
+    let balanceSheet = {
+      owes: {},        // userId → amount the logged-in user owes to others
+      owedTo: {},      // userId → amount others owe to the logged-in user
+      totalOwes: 0,
+      totalOwedTo: 0,
+    };
+
+    for (const expense of expenses) {
+      const payerId = expense.userId._id
+        ? expense.userId._id.toString()
+        : expense.userId.toString();
+
+      //  Split Method: "exact"
+      if (expense.splitMethod === "exact") {
+        for (const entry of expense.exactAmounts) {
+          const participantId = entry.userId._id
+            ? entry.userId._id.toString()
+            : entry.userId.toString();
+
+          const amount = entry.amount;
+          if (participantId === payerId) continue; // skip payer
+
+          if (participantId === userId && userId !== payerId) {
+            // logged-in user owes the payer
+            balanceSheet.owes[payerId] =
+              (balanceSheet.owes[payerId] || 0) + amount;
+            balanceSheet.totalOwes += amount;
+          } else if (payerId === userId) {
+            // logged-in user is the payer
+            balanceSheet.owedTo[participantId] =
+              (balanceSheet.owedTo[participantId] || 0) + amount;
+            balanceSheet.totalOwedTo += amount;
+          }
+        }
+      }
+
+      //  Split Method: "percentage"
+      if (expense.splitMethod === "percentage") {
+        for (const entry of expense.percentages) {
+          const participantId = entry.userId._id
+            ? entry.userId._id.toString()
+            : entry.userId.toString();
+
+          const amount = entry.amount;
+          if (participantId === payerId) continue;
+
+          if (participantId === userId && userId !== payerId) {
+            balanceSheet.owes[payerId] =
+              (balanceSheet.owes[payerId] || 0) + amount;
+            balanceSheet.totalOwes += amount;
+          } else if (payerId === userId) {
+            balanceSheet.owedTo[participantId] =
+              (balanceSheet.owedTo[participantId] || 0) + amount;
+            balanceSheet.totalOwedTo += amount;
+          }
+        }
+      }
+    }
+
+    //  Collect all userIds involved in owes/owedTo
+    const userIds = [
+      ...Object.keys(balanceSheet.owes),
+      ...Object.keys(balanceSheet.owedTo),
+    ];
+
+    // Fetch user info
+    const users = await User.find({ _id: { $in: userIds } }).select(
+      "username email"
+    );
+
+    // Helper to attach user details
+    const getUserInfo = (id) => {
+      const user = users.find((u) => u._id.toString() === id);
+      return user
+        ? { userId: id, username: user.username, email: user.email }
+        : { userId: id };
+    };
+
+    // Convert owes and owedTo into array with user info
+    balanceSheet.owes = Object.entries(balanceSheet.owes).map(
+      ([id, amount]) => ({
+        ...getUserInfo(id),
+        amount: parseFloat(amount.toFixed(2)),
+      })
+    );
+
+    balanceSheet.owedTo = Object.entries(balanceSheet.owedTo).map(
+      ([id, amount]) => ({
+        ...getUserInfo(id),
+        amount: parseFloat(amount.toFixed(2)),
+      })
+    );
+
+    return res.status(200).json({ balance: balanceSheet });
+  } catch (error) {
+    console.error("Error in getBalanceSheet:", error);
+    return res.status(500).json({ message: "Error fetching balance sheet" });
+  }
+};
+
+export const  generateBalanceSheet = async (req,res) => {
+    try{
+       const userId = req.user._id.toString();
+       const expenses = await Expense.find({
+      $or: [{ userId }, { participants: userId }],
+    })
+      .populate("userId", "username email")
+      .populate("participants", "username email");
+
+      const balanceData ={};
+
+      for(const expense of expenses){
+        const payerId = expense.userId._id.toString();
+
+        if(expense.splitMethod === "exact"){
+            for(const entry of expense.exactAmounts){
+                const participantId = entry.userId.toString();
+                const amount = entry.amount;
+            if(participantId === payerId)continue;
+
+            if(!balanceData[participantId]){
+                balanceData[participantId] = {owesTo : {}, username: null};
+            }
+
+            if(!balanceData[participantId].owesTo[payerId]){
+                balanceData[participantId].owesTo[payerId]=0;
+            }
+
+            balanceData[participantId].owesTo[payerId] += amount;
+        }
+      }
+      if (expense.splitMethod === "percentage") {
+        for (const entry of expense.percentages) {
+          const participantId = entry.userId.toString();
+          const amount = entry.amount;
+
+          if (participantId === payerId) continue;
+
+          if (!balanceData[participantId])
+            balanceData[participantId] = { owesTo: {}, username: null };
+
+          if (!balanceData[participantId].owesTo[payerId])
+            balanceData[participantId].owesTo[payerId] = 0;
+
+          balanceData[participantId].owesTo[payerId] += amount;
+        }
+      }
+    }
+    const userIds = new Set();
+    for (const uid in balanceData) {
+      userIds.add(uid);
+      Object.keys(balanceData[uid].owesTo).forEach((pid) => userIds.add(pid));
+    }
+
+    // Fetch usernames
+    const users = await User.find({ _id: { $in: Array.from(userIds) } });
+    const userMap = {};
+    users.forEach((u) => (userMap[u._id.toString()] = u.username));
+
+    // Format data for Excel
+    const rows = [];
+    for (const [uid, data] of Object.entries(balanceData)) {
+      const username = userMap[uid];
+      for (const [payerId, amount] of Object.entries(data.owesTo)) {
+        rows.push({
+          From_User: username,
+          To_User: userMap[payerId],
+          Amount: amount,
+        });
+      }
+    }
+
+    // Create Excel file
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb, ws, "Balance Sheet");
+
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader("Content-Disposition", "attachment; filename=balance_sheet.xlsx");
+
+    const buffer = XLSX.write(wb, { bookType: "xlsx", type: "buffer" });
+    res.send(buffer);
+  } catch (error) {
+    console.error("Error in generateBalanceSheet:", error);
+    res.status(500).json({ message: "Error generating balance sheet" });
+  }
 };
